@@ -27,8 +27,23 @@ console.log(await page.snapshot());
 EOF
 ```
 
-The heredoc always runs in Node.js, not in the web Page. Browser helpers and
-Node.js APIs belong in the heredoc; Page globals such as `window`, `document`,
+In some sandbox environments, heredoc input may not work; use `-e` instead:
+
+```bash
+ego-browser nodejs -e '
+const task = await taskSpace("inspect example page");
+const page = task.page("p1");
+await page.goto("https://example.com");
+console.log({ taskSpaceId: task.spaceId, page: page.label });
+console.log(await page.snapshot());
+'
+```
+
+In Bash/Zsh, use single quotes around the code and double quotes for JavaScript
+strings. Single quotes within the code require shell quoting.
+
+The script always runs in Node.js, not in the web Page. Browser helpers and
+Node.js APIs belong in the script; Page globals such as `window`, `document`,
 `location`, and DOM APIs do not. Put browser-side JavaScript inside
 `page.evaluate()`. Do not import Playwright or launch another browser.
 
@@ -58,7 +73,7 @@ and diagnose the CLI or installation only if it fails.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
   stop and ask the user.
-- Every heredoc starts a new Node.js process. Task spaces, tabs, and Page labels
+- Every invocation starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
 - A new task space starts with Page `p1`; navigate it instead of opening
   another Page.
@@ -127,7 +142,7 @@ ego-browser provides the following Page API:
   `fetch(url, options)`, `cdp(method, params, options)`
 
 `page.evaluate()` callbacks run only inside the Page; they cannot read variables
-or Node.js modules from the surrounding heredoc. Define browser-side helpers
+or Node.js modules from the surrounding script. Define browser-side helpers
 inside the callback or pass one JSON-serializable value as its second argument.
 
 Work efficiently:
@@ -148,10 +163,10 @@ and coordinates only when useful DOM semantics are unavailable.
 
 Before choosing an unfamiliar target, take a snapshot. When the current state
 is sufficient to plan several actions on the same Page, complete them in one
-heredoc, then observe the result once. Observe between actions only when an
+script invocation, then observe the result once. Observe between actions only when an
 intermediate result changes what should happen next. Keep the action sequence,
 the wait for its final expected state, and the next snapshot in the same
-heredoc. Print the snapshot last so the next round can act on it directly.
+script invocation. Print the snapshot last so the next round can act on it directly.
 The final snapshot is the next round's starting view of the changed page;
 without it, that round usually has to spend a separate browser call observing
 before it can choose the next target, which wastes compute.
@@ -266,7 +281,7 @@ Inspect the screenshot with an image-viewing tool. Coordinates use CSS pixels;
 keyboard names and `+`-separated chords follow Playwright syntax. Use
 `ControlOrMeta` for portable shortcuts and verify the resulting page state.
 `mouse.wheel()` performs a short wheel-input motion at the current mouse
-position and resolves when that motion completes. In each heredoc, move or
+position and resolves when that motion completes. In each script invocation, move or
 click over the intended scrollable area before using it.
 
 On macOS, `keyboard.paste()` sends the native paste shortcut and then restores
@@ -380,7 +395,7 @@ await download.saveAs("/absolute/path/report.pdf");
 directories. `download.path()` returns the round-local temporary file;
 `failure()`, `cancel()`, and `delete()` manage its lifecycle. Temporary download
 files are removed when the SDK round is disposed, so call `saveAs()` before the
-heredoc ends. Do not set a global download directory with raw CDP; each download
+script ends. Do not set a global download directory with raw CDP; each download
 wait configures and restores only the addressed Page session.
 
 `page.fetch()` runs `window.fetch()` in the Page: relative URLs, cookies, and
