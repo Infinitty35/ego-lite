@@ -45,6 +45,49 @@ test("page labels survive a new process and are never reused", async () => {
   });
 });
 
+test("Page ref state survives a process restart but not a browser restart or Page close", async () => {
+  await withTempLedger(async (rootDir) => {
+    const first = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-a",
+    });
+    await first.addPage(7, "page-a");
+    const refs = {
+      nextRef: 3,
+      refs: [
+        {
+          refId: "1",
+          backendNodeId: 42,
+          documentId: "document-a",
+          active: false,
+        },
+        {
+          refId: "2",
+          backendNodeId: 43,
+          documentId: "document-a",
+          active: true,
+        },
+      ],
+    };
+    await first.setPageRefs(7, "p1", refs);
+    const resumed = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-a",
+    });
+    assert.deepEqual((await resumed.getPage(7, "p1")).refs, refs);
+    const restarted = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-b",
+    });
+    await assert.rejects(
+      () => restarted.getPage(7, "p1"),
+      /page label not found/,
+    );
+    await resumed.closePage(7, "p1");
+    assert.deepEqual((await resumed.read(7)).pages, {});
+  });
+});
+
 test("a newly created space atomically replaces stale state with agent page p1", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({

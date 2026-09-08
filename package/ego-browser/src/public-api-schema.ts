@@ -244,7 +244,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       ),
       root: option(
         "nonEmptyString",
-        "Latest Page snapshot ref such as @21; required only when scope is subtree.",
+        "Valid Page snapshot ref such as @21; required only when scope is subtree. Partial snapshots preserve existing node identities.",
       ),
       includeActionMarks: option("boolean", "Include action marks."),
       includeStableLocator: option("boolean", "Include stable locators."),

@@ -125,6 +125,25 @@ function snapshotLineRefId(line: string): string | undefined {
   return match ? match[1] : undefined;
 }
 
+/** Rewrite only ref metadata, never quoted names or locator values. */
+export function rewriteSnapshotRefIds(
+  content: string,
+  refIds: ReadonlyMap<string, string>,
+): string {
+  return content.replace(/[^\r\n]+/g, (line) => {
+    const start = findSnapshotMetadataStart(line);
+    if (start < 0) return line;
+    return (
+      line.slice(0, start) +
+      line
+        .slice(start)
+        .replace(/^\[ref=([^,\]]+)/, (metadata, refId) =>
+          refIds.has(refId) ? `[ref=${refIds.get(refId)}` : metadata,
+        )
+    );
+  });
+}
+
 function findSnapshotMetadataStart(text: string): number {
   let quoted = false;
   let escaped = false;

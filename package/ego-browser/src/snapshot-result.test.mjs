@@ -5,9 +5,36 @@ import {
   compactSnapshotContent,
   compactSnapshotResult,
   preparePageSnapshotResult,
+  rewriteSnapshotRefIds,
   sanitizeSnapshotLocators,
   validateSnapshotLocator,
 } from "../dist/src/snapshot-result.js";
+
+test("public ref rewriting changes metadata once without changing quoted content or locators", () => {
+  const input = [
+    'button "literal \\"[ref=1]\\"" [ref=1, loc=css:[data-ref="[ref=1]"]]',
+    '  button "Second" [ref=2]',
+    '  text "keep [ref=1]"',
+    "button [ref=99]",
+    "",
+  ].join("\r\n");
+  assert.equal(
+    rewriteSnapshotRefIds(
+      input,
+      new Map([
+        ["1", "2"],
+        ["2", "3"],
+      ]),
+    ),
+    [
+      'button "literal \\"[ref=1]\\"" [ref=2, loc=css:[data-ref="[ref=1]"]]',
+      '  button "Second" [ref=3]',
+      '  text "keep [ref=1]"',
+      "button [ref=99]",
+      "",
+    ].join("\r\n"),
+  );
+});
 
 test("snapshot compaction removes only redundant text and containers", () => {
   const content = [

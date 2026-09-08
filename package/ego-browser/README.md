@@ -91,6 +91,7 @@ existing scripts.
 
 - The browser runtime owns tabs, task spaces, CDP transport, snapshots, and event delivery. This package keeps only agent-facing ergonomics.
 - Snapshot helpers use the browser runtime contract: `ego.snapshot({ scope, root, includeActionMarks, includeStableLocator })`; the Page API resolves a subtree `root` from a Page-scoped snapshot ref before invoking it.
+- V2 Page refs are SDK-assigned ids bound to a frame, document, and backend node. Partial snapshots retain omitted refs; full-page snapshots replace the active set. The Page ledger persists mappings and invalidation across Agent rounds. Missing, stale, or unresolvable refs require a fresh snapshot rather than native renumbering or role/name fallback.
 - Page selectors search the top document first. Input actions search frames
   when the top document has no match usable for that action, then require one
   usable frame match.

@@ -10,12 +10,17 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  validatePageRefState,
+  type PageRefState,
+} from "./page-ref-registry.js";
 
 export type PageOrigin = "agent" | "unknown";
 
 export type PageLedgerEntry = {
   targetId: string;
   openedBy: PageOrigin;
+  refs?: PageRefState;
 };
 
 export type ManagedPage = PageLedgerEntry & {
@@ -166,6 +171,19 @@ export class PageLedgerStore {
       added = { label, ...entry };
     });
     return added!;
+  }
+
+  async setPageRefs(
+    spaceId: number,
+    label: string,
+    refs: PageRefState,
+  ): Promise<void> {
+    assertLabel(label);
+    await this.#update(spaceId, (ledger) => {
+      const page = ledger.pages[label];
+      if (!page) throw new Error(`page label not found: ${label}`);
+      page.refs = validatePageRefState(refs);
+    });
   }
 
   async closePage(spaceId: number, label: string): Promise<ManagedPage> {
@@ -572,6 +590,9 @@ function validateLedger(
     pages[label] = {
       targetId: page.targetId,
       openedBy: normalizePageOrigin(page.openedBy),
+      ...(page.refs === undefined
+        ? {}
+        : { refs: validatePageRefState(page.refs) }),
     };
   }
   const normalizedUnmanagedTargets = Object.fromEntries(
