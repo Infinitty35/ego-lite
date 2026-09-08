@@ -246,6 +246,8 @@ export async function startFixtureServer(taskName) {
           ? `<iframe
               id="nested-subtree-frame"
               title="Nested subtree frame"
+              width="400"
+              height="200"
               src="/snapshot-subtree-frame-content?mode=same-origin&frame=nested-inner"
             ></iframe>`
           : "";
@@ -309,6 +311,8 @@ export async function startFixtureServer(taskName) {
           : `<iframe
               id="snapshot-subtree-frame"
               title="Deferred snapshot subtree frame"
+              width="${layout === "nested" ? 500 : 400}"
+              height="${layout === "nested" ? 450 : 300}"
               ${lazy ? 'loading="lazy"' : ""}
               src="${frameUrl(layout === "nested" ? "nested-outer" : "")}"
             ></iframe>`;
