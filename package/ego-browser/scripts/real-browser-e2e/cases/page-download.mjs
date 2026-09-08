@@ -213,15 +213,18 @@ export function pagePdfViewerDownloadCase() {
         "/api/openai-gpt-4-system-card.pdf",
         "the file link opens the PDF in a new Page instead of downloading"
       );
+      // Chromium's download icon identifies the button across locales and toolbar order,
+      // independently of ref/locator metadata printed beside snapshot buttons.
+      const downloadButton = "loc=css:cr-icon-button#save[iron-icon='cr:file-download']";
+      await preview.waitForSelector(downloadButton, {
+        state: "visible",
+        timeout: 10_000,
+      });
       const viewerDeadline = Date.now() + 10_000;
       let viewerSnapshot = "";
-      let viewerToolbar;
       while (Date.now() <= viewerDeadline) {
         viewerSnapshot = await preview.snapshot({ scope: "full_page" });
-        viewerToolbar = viewerSnapshot.match(
-          /        container\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"/
-        );
-        if (viewerToolbar && viewerSnapshot.includes('text "60"')) break;
+        if (viewerSnapshot.includes('text "60"')) break;
         await preview.waitForTimeout(100);
       }
       assertIncludes(
@@ -229,16 +232,10 @@ export function pagePdfViewerDownloadCase() {
         'text "60"',
         "Chromium renders the complete 60-page PDF in its viewer"
       );
-      const downloadButtonName = viewerToolbar?.[2] || "";
-      assert(downloadButtonName, "the PDF viewer exposes its localized download label");
-
       const pendingDownload = preview.waitForEvent("download", {
         timeout: 10_000,
       });
-      await preview.click(
-        "loc=role:button[name=" + JSON.stringify(downloadButtonName) + "]",
-        { timeout: 10_000 }
-      );
+      await preview.click(downloadButton, { timeout: 10_000 });
       const download = await pendingDownload;
 
       assertEqual(

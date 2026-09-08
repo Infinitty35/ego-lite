@@ -21,13 +21,14 @@ export function observationCase() {
     assertIncludes(snap.content || "", "Click counter", "snapshot contains button text");
     assert(Array.isArray(snap.refs), "snapshot returns refs array");
 
-    const buttonRef = (snap.refs || []).find(
+    const button = (snap.refs || []).find(
       (ref) =>
         String(ref?.role || "") === "button" &&
         (String(ref?.name || "").includes("Increment counter") ||
           String(ref?.name || "").includes("Click counter"))
-    )?.backendNodeId;
-    assert(buttonRef, "snapshot exposes a reusable backend ref for the button");
+    );
+    const buttonRef = button?.refId ?? button?.backendNodeId;
+    assert(buttonRef, "snapshot exposes a reusable printed ref for the button");
     const atRefCenter = await elementCenter("@" + buttonRef);
     assert(Number.isFinite(atRefCenter.x) && Number.isFinite(atRefCenter.y), "@ref resolves to coordinates");
     const namedRefCenter = await elementCenter("ref=" + buttonRef);
