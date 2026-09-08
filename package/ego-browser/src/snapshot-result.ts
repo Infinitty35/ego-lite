@@ -90,62 +90,6 @@ export function compactSnapshotResult(result: SnapshotResult): SnapshotResult {
   return result;
 }
 
-/** Keep iframe roots visible while deferring their descendants in viewport snapshots. */
-export function deferIframeSnapshotSubtrees(content: string): string {
-  if (typeof content !== "string" || content.length === 0) return content;
-  if (!content.split(/\r?\n/).some((line) => line.trim() === "root")) {
-    return content;
-  }
-
-  const newline = content.includes("\r\n") ? "\r\n" : "\n";
-  const trailingNewline = content.endsWith(newline);
-  const lines = content.split(/\r?\n/);
-  if (trailingNewline) lines.pop();
-
-  const output: string[] = [];
-  let deferredIndent: number | undefined;
-  for (const line of lines) {
-    const text = line.trim();
-    if (!text) {
-      if (deferredIndent === undefined) output.push(line);
-      continue;
-    }
-
-    const indent = line.length - line.trimStart().length;
-    if (deferredIndent !== undefined && indent > deferredIndent) continue;
-    deferredIndent = undefined;
-    output.push(line);
-    // Deferring is only safe when the iframe advertises a ref, because that ref
-    // is the caller's only way back into the subtree. An unreferenced iframe
-    // keeps its descendants inline rather than hiding them irrecoverably.
-    if (/^iframe(?:\s|$)/.test(text) && snapshotLineRefId(line) !== undefined) {
-      deferredIndent = indent;
-    }
-  }
-
-  return output.join(newline) + (trailingNewline ? newline : "");
-}
-
-/** Keep only refs still advertised by the final rendered snapshot text. */
-export function retainSnapshotRefsInContent(
-  result: SnapshotResult,
-): SnapshotResult {
-  if (!Array.isArray(result?.refs) || typeof result.content !== "string") {
-    return result;
-  }
-
-  const visibleRefIds = new Set<string>();
-  for (const line of result.content.split(/\r?\n/)) {
-    const refId = snapshotLineRefId(line);
-    if (refId !== undefined) visibleRefIds.add(refId);
-  }
-  result.refs = result.refs.filter((ref) => {
-    const refId = ref.refId ?? ref.backendNodeId;
-    return refId !== undefined && visibleRefIds.has(String(refId));
-  });
-  return result;
-}
-
 function compactSnapshotNode(node: SnapshotTreeNode): SnapshotTreeNode[] {
   const text = omitUnusableLocatorStatus(node.text);
   const children = node.children.flatMap(compactSnapshotNode);
@@ -179,6 +123,25 @@ function snapshotLineRefId(line: string): string | undefined {
   if (metadataIndex < 0) return undefined;
   const match = line.slice(metadataIndex).match(/^\[ref=([^,\]]+)/);
   return match ? match[1] : undefined;
+}
+
+/** Rewrite only ref metadata, never quoted names or locator values. */
+export function rewriteSnapshotRefIds(
+  content: string,
+  refIds: ReadonlyMap<string, string>,
+): string {
+  return content.replace(/[^\r\n]+/g, (line) => {
+    const start = findSnapshotMetadataStart(line);
+    if (start < 0) return line;
+    return (
+      line.slice(0, start) +
+      line
+        .slice(start)
+        .replace(/^\[ref=([^,\]]+)/, (metadata, refId) =>
+          refIds.has(refId) ? `[ref=${refIds.get(refId)}` : metadata,
+        )
+    );
+  });
 }
 
 function findSnapshotMetadataStart(text: string): number {

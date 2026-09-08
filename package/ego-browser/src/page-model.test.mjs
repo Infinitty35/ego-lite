@@ -136,6 +136,17 @@ function createFixture(rootDir) {
       const call = ["cdp", method, params, sessionId];
       if (timeoutMs !== undefined) call.push(timeoutMs);
       calls.push(call);
+      if (method === "Page.getFrameTree")
+        return {
+          frameTree: {
+            frame: { id: "frame-1", loaderId: "main-document" },
+            childFrames: ["frame-same", "frame-oopif", "frame-child"].map(
+              (id) => ({
+                frame: { id, loaderId: `document:${id}` },
+              }),
+            ),
+          },
+        };
       if (method === "Page.navigate") {
         const targetId = targetForSession(sessionId);
         tabs.get(targetId).url = params.url;
@@ -2059,7 +2070,7 @@ test("snapshot defaults to the viewport, reports its source, and validates optio
     );
     await assert.rejects(
       () => page.snapshot({ scope: "subtree", root: "@999" }),
-      /Unknown ref: @999/,
+      /Unknown ref: 999/,
     );
 
     await assert.rejects(
@@ -2069,21 +2080,128 @@ test("snapshot defaults to the viewport, reports its source, and validates optio
   });
 });
 
-test("a viewport snapshot preserves previously registered deferred iframe refs", async () => {
-  await withFixture(async (fixture) => {
-    const snapshotFixture = async () => ({
-      content: [
+test("viewport snapshots preserve native iframe contents and refs", async () => {
+  for (const options of [{}, { scope: "only_within_viewport" }]) {
+    await withFixture(async (fixture) => {
+      const content = [
         "root",
-        '  heading "Host"',
+        '  button "Host action" [ref=1]',
         "  iframe [ref=11]",
         "    root",
-        '      button "Hidden frame action" [ref=21]',
-      ].join("\n"),
-      refs: [
-        { refId: 11, backendNodeId: 11, role: "iframe" },
-        { refId: 21, backendNodeId: 21, role: "button" },
-      ],
+        '      button "Frame action" [ref=21]',
+        "      iframe [ref=31]",
+        "        root",
+        '          button "Nested OOPIF action" [ref=41]',
+        '  text "Host sibling"',
+      ].join("\n");
+      const task = taskForRound(fixture, "round-a", {
+        async cdp(method, params, sessionId, timeoutMs) {
+          if (method === "DOM.getFrameOwner") return { backendNodeId: 99 };
+          if (method === "DOM.getBoxModel") {
+            return { model: { content: [0, 0, 400, 0, 400, 300, 0, 300] } };
+          }
+          return fixture.services.cdp(method, params, sessionId, timeoutMs);
+        },
+        async ensureFrameSessions() {
+          return new Map([
+            ["frame-same", "session:target-1"],
+            ["frame-oopif", "session:oopif"],
+          ]);
+        },
+        async snapshot() {
+          return {
+            content,
+            refs: [
+              { refId: 1, backendNodeId: 1, role: "button" },
+              { refId: 11, backendNodeId: 11, role: "iframe" },
+              {
+                refId: 21,
+                backendNodeId: 21,
+                role: "button",
+                frameId: "frame-same",
+              },
+              {
+                refId: 31,
+                backendNodeId: 31,
+                role: "iframe",
+                frameId: "frame-same",
+              },
+              {
+                refId: 41,
+                backendNodeId: 21,
+                role: "button",
+                frameId: "frame-oopif",
+              },
+            ],
+          };
+        },
+      });
+      const page = await openTestPage(task, "https://example.test/iframe-host");
+
+      assert.equal(
+        (await page.snapshot(options)).split("\n").slice(1).join("\n"),
+        content,
+      );
+      const refs = fixture.services.pageRefs.forTarget(page.targetId);
+      assert.deepEqual([...refs.map.keys()], ["1", "11", "21", "31", "41"]);
+      assert.equal(refs.get("21").frameId, "frame-same");
+      assert.equal(refs.get("41").frameId, "frame-oopif");
+      assert.equal(refs.get("41").backendNodeId, 21);
+
+      for (const [ref, expectedSession] of [
+        ["@21", "session:target-1"],
+        ["@41", "session:oopif"],
+      ]) {
+        await page.snapshot(options);
+        const beforeAction = fixture.calls.length;
+        await page.click(ref);
+        const actionCalls = fixture.calls.slice(beforeAction);
+        const resolutions = actionCalls.filter(
+          ([kind, method, params]) =>
+            kind === "cdp" &&
+            method === "DOM.resolveNode" &&
+            params.backendNodeId === 21,
+        );
+        assert(resolutions.length > 0, `${ref} resolves its native node`);
+        assert(
+          resolutions.every(([, , , session]) => session === expectedSession),
+          `${ref} resolves the colliding backendNodeId only in its own frame`,
+        );
+        assert(
+          actionCalls.some(
+            ([kind, method, params, session]) =>
+              kind === "cdp" &&
+              method === "Input.dispatchMouseEvent" &&
+              params.type === "mouseReleased" &&
+              session === expectedSession,
+          ),
+          `${ref} dispatches its click in the expected session`,
+        );
+      }
     });
+  }
+});
+
+test("a viewport snapshot preserves previously registered offscreen iframe refs", async () => {
+  await withFixture(async (fixture) => {
+    const snapshotFixture = async ({ scope }) => {
+      if (scope === "only_within_viewport") {
+        return { content: 'root\n  heading "Host"', refs: [] };
+      }
+      return {
+        content: [
+          "root",
+          '  heading "Host"',
+          "  iframe [ref=11]",
+          "    root",
+          '      button "Hidden frame action" [ref=21]',
+        ].join("\n"),
+        refs: [
+          { refId: 11, backendNodeId: 11, role: "iframe" },
+          { refId: 21, backendNodeId: 21, role: "button" },
+        ],
+      };
+    };
     const task = taskForRound(fixture, "round-a", {
       snapshot: snapshotFixture,
     });
@@ -2098,7 +2216,7 @@ test("a viewport snapshot preserves previously registered deferred iframe refs",
 
     const snapshot = await page.snapshot();
 
-    assert.match(snapshot, /iframe \[ref=11\]/);
+    assert.doesNotMatch(snapshot, /iframe \[ref=/);
     assert.doesNotMatch(snapshot, /Hidden frame action/);
     assert.equal(
       fixture.services.pageRefs.forTarget(page.targetId).get("11")
@@ -2157,6 +2275,44 @@ test("a subtree snapshot preserves refs outside the observed subtree", async () 
       fixture.services.pageRefs.isInvalidated(page.targetId, "22"),
       false,
     );
+  });
+});
+
+test("subtree snapshots preserve saved sibling roots when native refs are reused", async () => {
+  await withFixture(async (fixture) => {
+    const requestedRoots = [];
+    const task = taskForRound(fixture, "round-a", {
+      async snapshot(options) {
+        if (options.scope !== "subtree") {
+          return {
+            content: "root\n  iframe [ref=1]\n  iframe [ref=2]",
+            refs: [
+              { refId: 1, backendNodeId: 35, role: "iframe" },
+              { refId: 2, backendNodeId: 36, role: "iframe" },
+            ],
+          };
+        }
+        requestedRoots.push(options.root);
+        return {
+          content: 'iframe [ref=1]\n  button "First frame action" [ref=2]',
+          refs: [
+            { refId: 1, backendNodeId: options.root, role: "iframe" },
+            {
+              refId: 2,
+              backendNodeId: 43,
+              role: "button",
+              frameId: "frame-child",
+            },
+          ],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/siblings");
+    await page.snapshot();
+    const first = await page.snapshot({ scope: "subtree", root: "@1" });
+    assert.doesNotMatch(first, /button.*\[ref=2\]/);
+    await page.snapshot({ scope: "subtree", root: "@2" });
+    assert.deepEqual(requestedRoots, [35, 36]);
   });
 });
 
@@ -4956,8 +5112,15 @@ test("Page actions resolve snapshot refs inside the addressed page", async () =>
   });
 });
 
-test("a new round refreshes the addressed Page before resolving a ref", async () => {
+test("a new round restores the published ref without renumbering from a fresh snapshot", async () => {
   await withFixture(async (fixture) => {
+    fixture.services.snapshot = async () => {
+      fixture.calls.push(["snapshot", fixture.activeTarget()]);
+      return {
+        content: 'button "Second" [ref=1]',
+        refs: [{ refId: 1, backendNodeId: 42, role: "button", name: "Second" }],
+      };
+    };
     const firstRound = taskForRound(fixture, "round-a");
     const created = await openTestPage(
       firstRound,
@@ -4968,24 +5131,31 @@ test("a new round refreshes the addressed Page before resolving a ref", async ()
       ([kind]) => kind === "snapshot",
     ).length;
 
+    fixture.services.snapshot = async () => {
+      fixture.calls.push(["snapshot", created.targetId]);
+      return {
+        content: 'button "First" [ref=1]',
+        refs: [{ refId: 1, backendNodeId: 21, role: "button", name: "First" }],
+      };
+    };
     const secondRound = taskForRound(fixture, "round-b", {
       pageRefs: new PageRefRegistry(),
     });
-    await secondRound.page(created.label).click("@21");
+    await secondRound.page(created.label).click("@1");
 
     assert.equal(
       fixture.calls.filter(([kind]) => kind === "snapshot").length,
-      snapshotsBefore + 1,
-      "an empty per-round ref map must refresh the same Page",
+      snapshotsBefore,
+      "the saved mapping must survive a new round without reconstructing native ids",
     );
-    assert.deepEqual(
-      fixture.calls.filter(([kind]) => kind === "snapshot").at(-1),
-      ["snapshot", created.targetId],
+    const resolved = fixture.calls.filter(
+      ([, method]) => method === "DOM.resolveNode",
     );
+    assert.equal(resolved.at(-1)[2].backendNodeId, 42);
   });
 });
 
-test("an unknown Page ref fails after one target-scoped refresh", async () => {
+test("an unknown Page ref fails without guessing a mapping from a new snapshot", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
     const page = await openTestPage(task, "https://example.test/first");
@@ -4993,7 +5163,136 @@ test("an unknown Page ref fails after one target-scoped refresh", async () => {
     await assert.rejects(() => page.click("@99"), /Unknown ref: 99/);
     assert.deepEqual(
       fixture.calls.filter(([kind]) => kind === "snapshot"),
-      [["snapshot", page.targetId]],
+      [],
+    );
+  });
+});
+
+test("ref invalidation survives a new Agent round", async () => {
+  await withFixture(async (fixture) => {
+    const page = await openTestPage(
+      taskForRound(fixture, "round-a"),
+      "https://example.test/first",
+    );
+    await page.snapshot();
+    await page.evaluate("document.title");
+    const restored = taskForRound(fixture, "round-b", {
+      pageRefs: new PageRefRegistry(),
+    }).page(page.label);
+
+    await assert.rejects(() => restored.click("@21"), /Stale ref: @21/);
+    assert.equal(
+      fixture.calls.filter(([, method]) => method === "DOM.resolveNode").length,
+      0,
+    );
+  });
+});
+
+for (const mode of ["page", "same-process iframe", "OOPIF"]) {
+  const frameId = mode === "page" ? undefined : "child-frame";
+  test(`saved refs reject a changed ${mode} document even when backend ids repeat`, async () => {
+    await withFixture(async (fixture) => {
+      let loaderId = "old-document";
+      const baseCdp = fixture.services.cdp;
+      const overrides = {
+        async cdp(method, params, sessionId) {
+          if (method === "Page.getFrameTree")
+            return {
+              frameTree:
+                sessionId === "session:oopif"
+                  ? { frame: { id: "child-frame", loaderId } }
+                  : {
+                      frame: {
+                        id: "main-frame",
+                        loaderId: frameId ? "main-document" : loaderId,
+                      },
+                      childFrames:
+                        mode === "OOPIF"
+                          ? []
+                          : [{ frame: { id: "child-frame", loaderId } }],
+                    },
+            };
+          return baseCdp(method, params, sessionId);
+        },
+        async snapshot() {
+          return {
+            content: 'button "Save" [ref=1]',
+            refs: [
+              {
+                refId: 1,
+                backendNodeId: 42,
+                frameId,
+                role: "button",
+                name: "Save",
+              },
+            ],
+          };
+        },
+        async ensureFrameSessions() {
+          return new Map([
+            [
+              "child-frame",
+              mode === "OOPIF" ? "session:oopif" : "session:target-1",
+            ],
+          ]);
+        },
+      };
+      const first = taskForRound(fixture, "round-a", overrides);
+      const page = await openTestPage(first, "https://example.test/first");
+      await page.snapshot();
+      loaderId = "new-document";
+      const restored = taskForRound(fixture, "round-b", {
+        ...overrides,
+        pageRefs: new PageRefRegistry(),
+      }).page(page.label);
+
+      await assert.rejects(
+        () => restored.snapshot({ scope: "subtree", root: "@1" }),
+        /Stale ref: @1/,
+      );
+      assert.equal(
+        fixture.calls.filter(([, method]) => method === "DOM.resolveNode")
+          .length,
+        0,
+      );
+      const fresh = await restored.snapshot();
+      assert.doesNotMatch(
+        fresh,
+        /\[ref=1\]/,
+        "a new document cannot inherit an old public ref",
+      );
+    });
+  });
+}
+
+test("a navigation during snapshot capture never publishes refs for a mixed document", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = "before";
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "main", loaderId } } };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot() {
+        loaderId = "after";
+        return {
+          content: 'button "Save" [ref=1]',
+          refs: [{ refId: 1, backendNodeId: 42 }],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    await assert.rejects(() => page.snapshot(), /Page changed during snapshot/);
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("1"),
+      undefined,
+    );
+    assert.match(
+      await page.snapshot(),
+      /\[ref=1\]/,
+      "an explicit retry captures the stable new document",
     );
   });
 });

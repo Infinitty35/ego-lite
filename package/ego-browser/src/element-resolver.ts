@@ -58,6 +58,7 @@ export async function resolveElementCenter(
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, "transient");
     }
+    assertRefProvenance(refMap, entry, refId);
     const effectiveSessionId = resolveFrameSession(
       entry.frameId,
       sessionId,
@@ -76,6 +77,7 @@ export async function resolveElementCenter(
           sessionId: effectiveSessionId,
         };
       } catch (error) {
+        if (refMap.allowFallback === false) throw exactRefError(error, refId);
         if (error instanceof ElementResolutionError) {
           // The node resolved but has no usable box model (not rendered yet).
           // Propagate the retryable state instead of falling back to role/name,
@@ -85,6 +87,7 @@ export async function resolveElementCenter(
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
+    if (refMap.allowFallback === false) throw staleRefError(refId);
     const backendNodeId = await findBackendNodeIdByRoleName(
       cdp,
       sessionId,
@@ -151,6 +154,7 @@ export async function resolveElementObjectId(
     if (!entry) {
       throw new ElementResolutionError(`Unknown ref: ${refId}`, "transient");
     }
+    assertRefProvenance(refMap, entry, refId);
     if (entry.frameProvenance === "unknown") {
       return resolveRefObjectIdWithRecoveredFrame(
         cdp,
@@ -184,10 +188,12 @@ export async function resolveElementObjectId(
             ...(entry.frameId ? { frameId: entry.frameId } : {}),
           };
         }
-      } catch {
+      } catch (error) {
+        if (refMap.allowFallback === false) throw exactRefError(error, refId);
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
+    if (refMap.allowFallback === false) throw staleRefError(refId);
     const backendNodeId = await findBackendNodeIdByRoleName(
       cdp,
       sessionId,
@@ -261,6 +267,30 @@ export async function resolveElementObjectId(
     `Element not found: ${selectorOrRef}`,
     "transient",
   );
+}
+
+function staleRefError(refId: string): ElementResolutionError {
+  return new ElementResolutionError(
+    `Stale ref: @${refId}; take a new snapshot`,
+    "permanent",
+  );
+}
+
+function exactRefError(error: unknown, refId: string): unknown {
+  return /(?:no node|could not find node|cannot find node) with given/i.test(
+    String(error),
+  )
+    ? staleRefError(refId)
+    : error;
+}
+
+function assertRefProvenance(refMap, entry, refId: string): void {
+  if (refMap.allowFallback === false && entry.frameProvenance === "unknown") {
+    throw new ElementResolutionError(
+      `Ref @${refId} has unknown frame provenance; take a new snapshot or use a locator`,
+      "permanent",
+    );
+  }
 }
 
 async function resolveRefObjectIdWithRecoveredFrame(

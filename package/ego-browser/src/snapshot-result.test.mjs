@@ -4,11 +4,37 @@ import assert from "node:assert/strict";
 import {
   compactSnapshotContent,
   compactSnapshotResult,
-  deferIframeSnapshotSubtrees,
   preparePageSnapshotResult,
+  rewriteSnapshotRefIds,
   sanitizeSnapshotLocators,
   validateSnapshotLocator,
 } from "../dist/src/snapshot-result.js";
+
+test("public ref rewriting changes metadata once without changing quoted content or locators", () => {
+  const input = [
+    'button "literal \\"[ref=1]\\"" [ref=1, loc=css:[data-ref="[ref=1]"]]',
+    '  button "Second" [ref=2]',
+    '  text "keep [ref=1]"',
+    "button [ref=99]",
+    "",
+  ].join("\r\n");
+  assert.equal(
+    rewriteSnapshotRefIds(
+      input,
+      new Map([
+        ["1", "2"],
+        ["2", "3"],
+      ]),
+    ),
+    [
+      'button "literal \\"[ref=1]\\"" [ref=2, loc=css:[data-ref="[ref=1]"]]',
+      '  button "Second" [ref=3]',
+      '  text "keep [ref=1]"',
+      "button [ref=99]",
+      "",
+    ].join("\r\n"),
+  );
+});
 
 test("snapshot compaction removes only redundant text and containers", () => {
   const content = [
@@ -106,46 +132,6 @@ test("snapshot compaction omits unusable locator statuses from refs", () => {
   assert.equal(result.refs[0].loc, undefined);
   assert.equal(result.refs[1].loc, undefined);
   assert.equal(result.refs[2].loc, "css:#save");
-});
-
-test("viewport snapshots defer iframe descendants while preserving frame roots and siblings", () => {
-  const content = [
-    "root",
-    '  heading "Host"',
-    "  iframe [ref=4]",
-    "    root",
-    '      button "Inside same-origin frame" [ref=5]',
-    '  text "Host sibling"',
-    "  iframe [ref=6]",
-    "    root",
-    "      iframe [ref=7]",
-    "        root",
-    '          textbox "Inside nested OOPIF" [ref=8]',
-    '  text "iframe is literal text, not a frame node"',
-  ].join("\n");
-
-  assert.equal(
-    deferIframeSnapshotSubtrees(content),
-    [
-      "root",
-      '  heading "Host"',
-      "  iframe [ref=4]",
-      '  text "Host sibling"',
-      "  iframe [ref=6]",
-      '  text "iframe is literal text, not a frame node"',
-    ].join("\n"),
-  );
-});
-
-test("iframe deferral preserves non-tree output and trailing newlines", () => {
-  assert.equal(
-    deferIframeSnapshotSubtrees("snapshot unavailable"),
-    "snapshot unavailable",
-  );
-  assert.equal(
-    deferIframeSnapshotSubtrees("root\n  iframe [ref=4]\n    root\n"),
-    "root\n  iframe [ref=4]\n",
-  );
 });
 
 test("snapshot locator validation batches DOM queries and object cleanup", async () => {
@@ -579,31 +565,6 @@ test("Page snapshots do not invent frame provenance for an ambiguous backend nod
 
   assert.equal(result.refs[0].frameId, undefined);
   assert.equal(result.refs[0].frameProvenance, "unknown");
-});
-
-test("iframe deferral keeps a frame that advertises no ref expandable", () => {
-  // Deferring an iframe with no ref would hide its descendants with no root to
-  // pass back through subtree scope, so that frame stays inline.
-  const content = [
-    "root",
-    "  iframe",
-    "    root",
-    '      button "Unreachable without a ref" [ref=5]',
-    "  iframe [ref=6]",
-    "    root",
-    '      button "Reachable via @6" [ref=7]',
-  ].join("\n");
-
-  assert.equal(
-    deferIframeSnapshotSubtrees(content),
-    [
-      "root",
-      "  iframe",
-      "    root",
-      '      button "Unreachable without a ref" [ref=5]',
-      "  iframe [ref=6]",
-    ].join("\n"),
-  );
 });
 
 test("frame provenance ignores a ref token inside an accessible name", async () => {

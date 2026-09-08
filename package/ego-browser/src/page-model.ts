@@ -97,11 +97,14 @@ import {
   type PageLedger,
   type PageOrigin,
 } from "./page-ledger.js";
-import { PageRefRegistry } from "./page-ref-registry.js";
 import {
-  deferIframeSnapshotSubtrees,
+  PageRefRegistry,
+  pageRefDocumentId,
+  type PageRefState,
+} from "./page-ref-registry.js";
+import {
   preparePageSnapshotResult,
-  retainSnapshotRefsInContent,
+  rewriteSnapshotRefIds,
 } from "./snapshot-result.js";
 import {
   clearSpacePageNotices,
@@ -299,6 +302,11 @@ type LedgerPort = {
     options?: { as?: string; openedBy?: PageOrigin },
   ): Promise<ManagedPage>;
   getPage(spaceId: number, label: string): Promise<ManagedPage>;
+  setPageRefs(
+    spaceId: number,
+    label: string,
+    refs: PageRefState,
+  ): Promise<void>;
   closePage(spaceId: number, label: string): Promise<ManagedPage>;
   releasePage(spaceId: number, label: string): Promise<ManagedPage>;
   keepUnmanaged(
@@ -1670,6 +1678,7 @@ class Page {
       }
       const { root: _root, ...snapshotOptions } = options;
       const snapshotScope = options.scope ?? "only_within_viewport";
+      const beforeDocuments = await this.#pageDocuments(page, sessionId);
       const result = await this.#services.snapshot({
         ...snapshotOptions,
         ...(root === undefined ? {} : { root }),
@@ -1677,13 +1686,6 @@ class Page {
         includeActionMarks: options.includeActionMarks ?? true,
         includeStableLocator: options.includeStableLocator ?? true,
       });
-      if (
-        snapshotScope === "only_within_viewport" &&
-        typeof result?.content === "string"
-      ) {
-        result.content = deferIframeSnapshotSubtrees(result.content);
-        retainSnapshotRefsInContent(result);
-      }
       const iframeSessions =
         Array.isArray(result?.refs) && result.refs.length > 0
           ? await this.#services.ensureFrameSessions(page.targetId)
@@ -1695,11 +1697,30 @@ class Page {
         result,
         rootContext,
       );
-      if (snapshotScope === "full_page") {
-        this.#services.pageRefs.replace(page.targetId, result?.refs || []);
-      } else {
-        this.#services.pageRefs.merge(page.targetId, result?.refs || []);
+      const documents = await this.#pageDocuments(page, sessionId);
+      for (const ref of result?.refs || []) {
+        const documentId = pageRefDocumentId(ref, documents);
+        if (
+          !documentId ||
+          documentId !== pageRefDocumentId(ref, beforeDocuments)
+        ) {
+          throw new ElementResolutionError(
+            "Page changed during snapshot; take a new snapshot",
+            "transient",
+          );
+        }
+        ref.documentId = documentId;
       }
+      await this.#loadRefs(page);
+      this.#services.pageRefs.invalidateChangedDocuments(
+        page.targetId,
+        documents,
+      );
+      await this.#registerSnapshotRefs(
+        page,
+        result,
+        snapshotScope === "full_page",
+      );
       const content = result?.content || "";
       const header = await this.#snapshotHeader(page);
       return `${header}\n${content}`;
@@ -1987,7 +2008,7 @@ class Page {
       } finally {
         // The predicate may mutate the DOM, so snapshot refs are no longer
         // guaranteed to identify the same elements.
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
       }
       throw waitForFunctionTimeoutError(
         this.spaceId,
@@ -2060,7 +2081,7 @@ class Page {
       } finally {
         // Raw CDP can navigate or mutate the document, so existing refs are no
         // longer safe even when the command looked observational.
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
       }
     });
   }
@@ -2097,7 +2118,7 @@ class Page {
       try {
         await waitForLoadStateInPage(this.#services, sessionId, state, options);
       } finally {
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
       }
     });
   }
@@ -2486,7 +2507,7 @@ class Page {
           throw error;
         }
       } finally {
-        if (activate) this.#services.pageRefs.invalidate(page.targetId);
+        if (activate) await this.#invalidateRefs(page);
       }
     });
   }
@@ -2652,7 +2673,7 @@ class Page {
         );
         // A handled dialog resumes its callback and may mutate the DOM. A
         // no-dialog response leaves the page untouched, so its refs stay valid.
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
         return true;
       } catch (error) {
         if (isNoJavaScriptDialogError(error)) return false;
@@ -2670,7 +2691,7 @@ class Page {
       try {
         return await operation(sessionId);
       } finally {
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
       }
     });
   }
@@ -2762,7 +2783,7 @@ class Page {
         };
       } finally {
         await fileChooserGuard?.dispose();
-        this.#services.pageRefs.invalidate(page.targetId);
+        await this.#invalidateRefs(page);
       }
     });
   }
@@ -2772,41 +2793,135 @@ class Page {
     sessionId: string,
     ...selectors: string[]
   ): Promise<RefMap> {
+    if (!selectors.some((selector) => parseRef(selector))) {
+      return this.#services.pageRefs.forTarget(page.targetId);
+    }
+    await this.#loadRefs(page);
+    const registry = this.#services.pageRefs;
+    registry.invalidateChangedDocuments(
+      page.targetId,
+      await this.#pageDocuments(page, sessionId),
+    );
+    await this.#saveRefs(page);
+    const refs = registry.forTarget(page.targetId);
     for (const selector of selectors) {
       const refId = parseRef(selector);
-      if (
-        refId &&
-        this.#services.pageRefs.isInvalidated(page.targetId, refId)
-      ) {
+      if (!refId) continue;
+      if (registry.isInvalidated(page.targetId, refId)) {
         throw new ElementResolutionError(
           `Stale ref: @${refId}; take a new snapshot`,
           "permanent",
         );
       }
+      if (!refs.get(refId)) {
+        throw new ElementResolutionError(
+          `Unknown ref: ${refId}; take a new snapshot`,
+          "permanent",
+        );
+      }
     }
-    let refs = this.#services.pageRefs.forTarget(page.targetId);
-    const missingRef = selectors.some((selector) => {
-      const refId = parseRef(selector);
-      return Boolean(refId && !refs.get(refId));
-    });
-    if (!missingRef) return refs;
+    return refs;
+  }
 
-    const result = await this.#services.snapshot({
-      scope: "full_page",
-      includeActionMarks: true,
-      includeStableLocator: true,
-    });
-    const iframeSessions =
-      Array.isArray(result?.refs) && result.refs.length > 0
-        ? await this.#services.ensureFrameSessions(page.targetId)
-        : new Map<string, string>();
-    await preparePageSnapshotResult(
-      this.#services,
-      sessionId,
-      iframeSessions,
-      result,
+  async #pageDocuments(
+    page: PageTarget,
+    sessionId: string,
+  ): Promise<Map<string, string>> {
+    const iframeSessions = await this.#services.ensureFrameSessions(
+      page.targetId,
     );
-    refs = this.#services.pageRefs.replace(page.targetId, result?.refs || []);
+    const readTree = async (session: string) => {
+      const response = await this.#services.cdp(
+        "Page.getFrameTree",
+        {},
+        session,
+      );
+      return (response.result || response).frameTree;
+    };
+    const tree = await readTree(sessionId);
+    const documents = new Map<string, string>();
+    const visit = (node) => {
+      if (
+        typeof node?.frame?.id !== "string" ||
+        typeof node.frame.loaderId !== "string"
+      )
+        return;
+      documents.set(
+        node.frame.id,
+        JSON.stringify([
+          tree.frame.id,
+          tree.frame.loaderId,
+          node.frame.id,
+          node.frame.loaderId,
+        ]),
+      );
+      for (const child of node.childFrames || []) visit(child);
+    };
+    visit(tree);
+    const root = documents.get(tree?.frame?.id);
+    if (!root)
+      throw new ElementResolutionError(
+        "Cannot verify Page document; take a new snapshot",
+        "transient",
+      );
+    // The Page tree excludes out-of-process frames. Read their own sessions;
+    // a vanished frame leaves no document identity, so its refs expire.
+    const frames = await Promise.allSettled(
+      [...new Set(iframeSessions.values())]
+        .filter((session) => session !== sessionId)
+        .map(readTree),
+    );
+    for (const frame of frames)
+      if (frame.status === "fulfilled") visit(frame.value);
+    documents.set("", root);
+    return documents;
+  }
+
+  async #loadRefs(page: PageTarget): Promise<void> {
+    const stored = await this.#services.ledger.getPage(
+      page.spaceId,
+      this.label,
+    );
+    this.#services.pageRefs.restore(page.targetId, stored.refs);
+  }
+
+  async #saveRefs(page: PageTarget): Promise<void> {
+    const refs = this.#services.pageRefs.exportState(page.targetId);
+    if (refs)
+      await this.#services.ledger.setPageRefs(page.spaceId, this.label, refs);
+  }
+
+  async #invalidateRefs(page: PageTarget): Promise<void> {
+    await this.#loadRefs(page);
+    this.#services.pageRefs.invalidate(page.targetId);
+    await this.#saveRefs(page);
+  }
+
+  async #registerSnapshotRefs(
+    page: PageTarget,
+    result: any,
+    replace: boolean,
+  ): Promise<RefMap> {
+    const nativeRefs = result?.refs || [];
+    const originalIds = nativeRefs.map((ref) =>
+      String(ref.refId ?? ref.backendNodeId),
+    );
+    const registry = this.#services.pageRefs;
+    const refs = replace
+      ? registry.replace(page.targetId, nativeRefs)
+      : registry.merge(page.targetId, nativeRefs);
+    if (typeof result?.content === "string") {
+      result.content = rewriteSnapshotRefIds(
+        result.content,
+        new Map(
+          nativeRefs.map((ref, index) => [
+            originalIds[index],
+            String(ref.refId),
+          ]),
+        ),
+      );
+    }
+    await this.#saveRefs(page);
     return refs;
   }
 

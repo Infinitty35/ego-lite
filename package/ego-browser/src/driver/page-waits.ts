@@ -210,7 +210,11 @@ function isRetryableSelectorWaitError(
   error: unknown,
   pageSessionId: string,
 ): boolean {
-  if (isTransientElementError(error)) return true;
+  if (
+    isTransientElementError(error) ||
+    isTransientNavigationContextError(error)
+  )
+    return true;
   // A lost iframe session is recovered by rediscovery. A lost Page session is
   // terminal: never report a closed page as "hidden" or keep polling it.
   return (

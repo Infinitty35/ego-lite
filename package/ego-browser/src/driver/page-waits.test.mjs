@@ -123,6 +123,86 @@ test("waitForSelectorInPage rethrows a lost page session instead of reporting hi
   );
 });
 
+for (const [state, interruptedMethod] of [
+  ["visible", "Runtime.evaluate"],
+  ["hidden", "Runtime.callFunctionOn"],
+]) {
+  test(`waitForSelectorInPage retries context changes before reporting ${state}`, async () => {
+    let now = 0;
+    let discoveries = 0;
+    let interrupted = false;
+    let visibilityChecks = 0;
+    const services = {
+      async cdp(method) {
+        if (method === interruptedMethod && !interrupted) {
+          interrupted = true;
+          throw new Error("Cannot find context with specified id");
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { objectId: "object:ready" } };
+        }
+        if (method === "Runtime.callFunctionOn") {
+          visibilityChecks += 1;
+          return { result: { value: state === "visible" } };
+        }
+        if (method === "Runtime.releaseObject") return {};
+        throw new Error(`unexpected CDP method: ${method}`);
+      },
+      now: () => now,
+      async sleep(ms) {
+        now += ms;
+      },
+    };
+
+    assert.equal(
+      await waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#ready",
+        { state, timeout: 500 },
+        async () => {
+          discoveries += 1;
+          return new Map();
+        },
+      ),
+      true,
+    );
+    assert.equal(discoveries, 2, "a context change refreshes frame sessions");
+    assert.equal(visibilityChecks, 1, "the wait verifies the requested state");
+  });
+}
+
+test("waitForSelectorInPage bounds repeated context changes by its timeout", async () => {
+  let now = 0;
+  let attempts = 0;
+  const services = {
+    async cdp() {
+      attempts += 1;
+      throw new Error("Cannot find context with specified id");
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#ready",
+        { state: "visible", timeout: 500 },
+        async () => new Map(),
+      ),
+    /page\.waitForSelector timed out after 500ms: #ready/,
+  );
+  assert(attempts > 1);
+  assert.equal(now, 500);
+});
+
 test("waitForSelectorInPage reports its own timeout at the deadline", async () => {
   let now = 0;
   const discoveryTimeouts = [];

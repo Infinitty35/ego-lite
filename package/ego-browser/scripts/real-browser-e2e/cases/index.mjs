@@ -15,8 +15,20 @@ import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
 import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
 import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
-import { pageSnapshotSubtreeCase } from "./page-snapshot-subtree.mjs";
+import {
+  pageSnapshotIframeViewportCase,
+  pageSnapshotLazyIframeCase,
+  pageSnapshotNestedIframeCase,
+  pageSnapshotReplacedIframeCase,
+  pageSnapshotSiblingIframeCase,
+  pageSnapshotSubtreeCase,
+} from "./page-snapshot-subtree.mjs";
 import { pageShadowDomCase } from "./page-shadow-dom.mjs";
+import {
+  pageRefIdentityCase,
+  pageRefPrepareRoundCase,
+  pageRefResumeRoundCase,
+} from "./page-ref-identity.mjs";
 import { pageTextLocatorCase } from "./page-text-locators.mjs";
 import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
 import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
@@ -104,7 +116,27 @@ export const e2eCases = [
   { name: "Page media playback", body: pageMediaPlaybackCase },
   { name: "Page scrolled screenshot", body: pageScrolledScreenshotCase },
   { name: "Page snapshot locator quality", body: pageSnapshotLocatorCase },
+  {
+    name: "Page snapshot iframe viewport",
+    body: pageSnapshotIframeViewportCase,
+  },
   { name: "Page snapshot subtree", body: pageSnapshotSubtreeCase },
+  {
+    name: "Page ref identity across partial snapshots",
+    body: pageRefIdentityCase,
+  },
+  { name: "Page refs across rounds: prepare", body: pageRefPrepareRoundCase },
+  { name: "Page refs across rounds: resume", body: pageRefResumeRoundCase },
+  { name: "Page snapshot lazy iframe", body: pageSnapshotLazyIframeCase },
+  {
+    name: "Page snapshot sibling iframes",
+    body: pageSnapshotSiblingIframeCase,
+  },
+  { name: "Page snapshot nested iframes", body: pageSnapshotNestedIframeCase },
+  {
+    name: "Page snapshot replaced iframe",
+    body: pageSnapshotReplacedIframeCase,
+  },
   { name: "Page open Shadow DOM locators", body: pageShadowDomCase },
   { name: "Page text locators", body: pageTextLocatorCase },
   {

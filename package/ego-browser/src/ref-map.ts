@@ -1,8 +1,10 @@
 export class RefMap {
   map: Map<string, any>;
+  readonly allowFallback: boolean;
 
-  constructor() {
+  constructor({ allowFallback = true } = {}) {
     this.map = new Map();
+    this.allowFallback = allowFallback;
   }
 
   add(refId, backendNodeId, role, name, nth = undefined) {

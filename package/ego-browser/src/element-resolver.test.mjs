@@ -7,6 +7,43 @@ import {
   ElementResolutionError,
 } from "../dist/src/element-resolver.js";
 import { RefMap } from "../dist/src/ref-map.js";
+import { PageRefRegistry } from "../dist/src/page-ref-registry.js";
+
+for (const resolve of [resolveElementCenter, resolveElementObjectId]) {
+  test(`${resolve.name}: Page refs never fall back to a different node with the same label`, async () => {
+    const refs = new PageRefRegistry().replace("page", [
+      { refId: 1, backendNodeId: 100, role: "button", name: "Save" },
+    ]);
+    const cdp = new FakeCDP(async (method, params) => {
+      if (params.backendNodeId === 100)
+        throw new Error("No node with given id found");
+      if (method === "Accessibility.getFullAXTree")
+        return {
+          nodes: [
+            {
+              role: { value: "button" },
+              name: { value: "Save" },
+              backendDOMNodeId: 200,
+            },
+          ],
+        };
+      if (method === "DOM.resolveNode")
+        return { object: { objectId: "replacement-save-button" } };
+      if (method === "DOM.getBoxModel")
+        return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
+      return {};
+    });
+
+    await assert.rejects(
+      () => resolve(cdp, "session:page", refs, "@1"),
+      /Stale ref: @1/,
+    );
+    assert.equal(
+      cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+      false,
+    );
+  });
+}
 
 class FakeCDP {
   constructor(handler) {
@@ -25,6 +62,43 @@ const AX_TREE = {
     { role: { value: "button" }, name: { value: "ok" }, backendDOMNodeId: 100 },
   ],
 };
+
+test("exact Page refs preserve session errors for the existing recovery boundary", async () => {
+  const refs = new PageRefRegistry().replace("page", [
+    { refId: 1, backendNodeId: 100, frameId: "frame" },
+  ]);
+  const failure = Object.assign(new Error("Session with given id not found"), {
+    sessionId: "session:frame",
+  });
+  const cdp = new FakeCDP(async () => {
+    throw failure;
+  });
+  await assert.rejects(
+    () =>
+      resolveElementObjectId(
+        cdp,
+        "session:page",
+        refs,
+        "@1",
+        new Map([["frame", "session:frame"]]),
+      ),
+    (error) => error === failure,
+  );
+});
+
+test("Page refs with unknown frame provenance fail before resolving an ambiguous backend id", async () => {
+  const refs = new PageRefRegistry().replace("page", [
+    { refId: 1, backendNodeId: 100, frameProvenance: "unknown" },
+  ]);
+  const cdp = new FakeCDP(async () => ({
+    object: { objectId: "unverified-node" },
+  }));
+  await assert.rejects(
+    () => resolveElementObjectId(cdp, "session:page", refs, "@1"),
+    /unknown frame provenance/,
+  );
+  assert.equal(cdp.calls.length, 0);
+});
 
 test("resolveElementCenter computes the center from a valid box model", async () => {
   const refMap = new RefMap();
