@@ -239,7 +239,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     options: {
       scope: option(
         "string",
-        "Snapshot scope; defaults to only_within_viewport, which keeps iframe roots but defers their descendants. Use subtree with an iframe root ref to inspect that frame.",
+        "Snapshot scope; defaults to only_within_viewport, including visible iframe content returned by the browser. Use subtree with an iframe root ref to focus on that frame.",
         ["full_page", "only_within_viewport", "subtree"],
       ),
       root: option(

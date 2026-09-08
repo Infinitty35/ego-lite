@@ -98,11 +98,7 @@ import {
   type PageOrigin,
 } from "./page-ledger.js";
 import { PageRefRegistry } from "./page-ref-registry.js";
-import {
-  deferIframeSnapshotSubtrees,
-  preparePageSnapshotResult,
-  retainSnapshotRefsInContent,
-} from "./snapshot-result.js";
+import { preparePageSnapshotResult } from "./snapshot-result.js";
 import {
   clearSpacePageNotices,
   forgetPageNotice,
@@ -1677,13 +1673,6 @@ class Page {
         includeActionMarks: options.includeActionMarks ?? true,
         includeStableLocator: options.includeStableLocator ?? true,
       });
-      if (
-        snapshotScope === "only_within_viewport" &&
-        typeof result?.content === "string"
-      ) {
-        result.content = deferIframeSnapshotSubtrees(result.content);
-        retainSnapshotRefsInContent(result);
-      }
       const iframeSessions =
         Array.isArray(result?.refs) && result.refs.length > 0
           ? await this.#services.ensureFrameSessions(page.targetId)
