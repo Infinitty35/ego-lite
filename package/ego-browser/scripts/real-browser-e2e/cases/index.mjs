@@ -29,6 +29,13 @@ import {
   pageRefPrepareRoundCase,
   pageRefResumeRoundCase,
 } from "./page-ref-identity.mjs";
+import {
+  pageRefDialogWorkflowCase,
+  pageRefFailedActionPrepareCase,
+  pageRefFailedActionResumeCase,
+  pageRefUploadPrepareCase,
+  pageRefUploadResumeCase,
+} from "./page-ref-workflows.mjs";
 import { pageTextLocatorCase } from "./page-text-locators.mjs";
 import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
 import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
@@ -127,6 +134,17 @@ export const e2eCases = [
   },
   { name: "Page refs across rounds: prepare", body: pageRefPrepareRoundCase },
   { name: "Page refs across rounds: resume", body: pageRefResumeRoundCase },
+  { name: "Page refs in dialog workflows", body: pageRefDialogWorkflowCase },
+  {
+    name: "Page refs after failed actions: prepare",
+    body: pageRefFailedActionPrepareCase,
+  },
+  {
+    name: "Page refs after failed actions: resume",
+    body: pageRefFailedActionResumeCase,
+  },
+  { name: "Page refs after upload: prepare", body: pageRefUploadPrepareCase },
+  { name: "Page refs after upload: resume", body: pageRefUploadResumeCase },
   { name: "Page snapshot lazy iframe", body: pageSnapshotLazyIframeCase },
   {
     name: "Page snapshot sibling iframes",

@@ -5112,6 +5112,87 @@ test("Page actions resolve snapshot refs inside the addressed page", async () =>
   });
 });
 
+test("consecutive clicks preserve sibling refs from one snapshot", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async snapshot() {
+        return {
+          content:
+            'button "First" [ref=19]\nbutton "Second" [ref=22]\nbutton "Third" [ref=23]',
+          refs: [19, 22, 23].map((refId) => ({
+            refId,
+            backendNodeId: refId + 100,
+            role: "button",
+          })),
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/buttons");
+    await page.snapshot();
+
+    await page.click("@19");
+    await page.click("@22");
+    await page.click("@23");
+
+    assert.deepEqual(
+      fixture.calls
+        .filter(([, method]) => method === "DOM.resolveNode")
+        .map(([, , params]) => params.backendNodeId),
+      [119, 122, 123],
+    );
+  });
+});
+
+test("fill and press reuse a published ref in a new round", async () => {
+  await withFixture(async (fixture) => {
+    const page = await openTestPage(
+      taskForRound(fixture, "round-a"),
+      "https://example.test/input",
+    );
+    await page.snapshot();
+    await fixture.services.sleep(4_000);
+    const restored = taskForRound(fixture, "round-b", {
+      pageRefs: new PageRefRegistry(),
+    }).page(page.label);
+
+    await restored.fill("@21", "M2");
+    await restored.press("@21", "Enter");
+
+    assert(
+      fixture.calls.some(
+        ([, method, params]) =>
+          method === "Input.dispatchKeyEvent" && params.key === "Enter",
+      ),
+    );
+    assert.equal(
+      fixture.calls.filter(([kind]) => kind === "snapshot").length,
+      1,
+      "reusing the same node must not trigger a new snapshot",
+    );
+  });
+});
+
+test("raw keyboard input preserves unchanged refs into the next round", async () => {
+  await withFixture(async (fixture) => {
+    const page = await openTestPage(
+      taskForRound(fixture, "round-a"),
+      "https://example.test/input",
+    );
+    await page.snapshot();
+    await page.keyboard.press("Tab");
+    const restored = taskForRound(fixture, "round-b", {
+      pageRefs: new PageRefRegistry(),
+    }).page(page.label);
+
+    await restored.click("@21");
+    assert.equal(
+      fixture.calls.find(([, method]) => method === "DOM.resolveNode")[2]
+        .backendNodeId,
+      21,
+    );
+  });
+});
+
 test("a new round restores the published ref without renumbering from a fresh snapshot", async () => {
   await withFixture(async (fixture) => {
     fixture.services.snapshot = async () => {
@@ -5187,6 +5268,96 @@ test("ref invalidation survives a new Agent round", async () => {
     );
   });
 });
+
+for (const persistentFailure of [false, true]) {
+  test(`cross-round refs survive an iframe document read failure${persistentFailure ? " after the action times out" : " during the first action"}`, async () => {
+    await withFixture(async (fixture) => {
+      let frameSession = "session:oopif";
+      let failFrameRead = false;
+      const baseCdp = fixture.services.cdp;
+      const overrides = {
+        async cdp(method, params, sessionId) {
+          if (method === "Page.getFrameTree") {
+            if (sessionId === "session:target-1") {
+              return {
+                frameTree: {
+                  frame: { id: "main-frame", loaderId: "main-document" },
+                },
+              };
+            }
+            if (failFrameRead) {
+              failFrameRead = persistentFailure;
+              frameSession = "session:oopif-reconnected";
+              throw Object.assign(
+                new Error("Session with given id not found"),
+                {
+                  sessionId,
+                },
+              );
+            }
+            return {
+              frameTree: {
+                frame: { id: "child-frame", loaderId: "same-document" },
+              },
+            };
+          }
+          return baseCdp(method, params, sessionId);
+        },
+        async snapshot() {
+          return {
+            content: 'textbox "Cell address" [ref=19]',
+            refs: [{ refId: 19, backendNodeId: 42, frameId: "child-frame" }],
+          };
+        },
+        async ensureFrameSessions() {
+          return new Map([["child-frame", frameSession]]);
+        },
+      };
+      const page = await openTestPage(
+        taskForRound(fixture, "round-a", overrides),
+        "https://example.test/iframe",
+      );
+      await page.snapshot();
+      failFrameRead = true;
+      let restored = taskForRound(fixture, "round-b", {
+        ...overrides,
+        pageRefs: new PageRefRegistry(),
+      }).page(page.label);
+
+      if (persistentFailure) {
+        await assert.rejects(
+          () => restored.press("@19", "Enter", { timeout: 100 }),
+          /timed out.*Session with given id not found/,
+        );
+        failFrameRead = false;
+        restored = taskForRound(fixture, "round-c", {
+          ...overrides,
+          pageRefs: new PageRefRegistry(),
+        }).page(page.label);
+      }
+      await restored.press("@19", "Enter");
+
+      assert.equal(
+        fixture.calls.filter(
+          ([, method, params]) =>
+            method === "Input.dispatchKeyEvent" &&
+            params.type === "keyUp" &&
+            params.key === "Enter",
+        ).length,
+        1,
+        "document verification must recover before dispatching input once",
+      );
+      assert(
+        fixture.calls.some(
+          ([, method, params, sessionId]) =>
+            method === "DOM.resolveNode" &&
+            params.backendNodeId === 42 &&
+            sessionId === "session:oopif-reconnected",
+        ),
+      );
+    });
+  });
+}
 
 for (const mode of ["page", "same-process iframe", "OOPIF"]) {
   const frameId = mode === "page" ? undefined : "child-frame";

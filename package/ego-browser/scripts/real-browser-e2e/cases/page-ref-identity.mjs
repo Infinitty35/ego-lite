@@ -28,9 +28,10 @@ export function pageRefIdentityCase() {
         assertEqual(refFor(partial, 'Second ref action'), secondRef, scope + ' preserves the second button ref');
         assert(!partial.includes('First ref action'), scope + ' omits the first button');
         await page.click(firstRef);
+        await page.click(secondRef);
         const clicks = await page.evaluate(() => window.__refClicks);
         assertEqual(clicks.first, 1, scope + ' keeps the omitted first ref bound to the first button');
-        assertEqual(clicks.second, 0, scope + ' never redirects that ref to the second button');
+        assertEqual(clicks.second, 1, scope + ' preserves the second ref after clicking the first button');
       } finally {
         await page.close();
       }
@@ -43,9 +44,17 @@ export function pageRefPrepareRoundCase() {
     const task = await taskSpace(taskName);
     const page = await newPageAt(task, baseUrl + '/nav-target');
     await page.evaluate(() => {
-      document.body.innerHTML = '<button id="first" aria-label="First round action">First round action</button><button id="second" aria-label="Second round action">Second round action</button>';
+      document.body.innerHTML = '<button id="first" aria-label="First round action">First round action</button><button id="second" aria-label="Second round action">Second round action</button><input aria-label="Cell address"><output></output>';
       window.__refClicks = { first: 0, second: 0 };
       for (const id of ['first', 'second']) document.getElementById(id).onclick = () => window.__refClicks[id]++;
+      document.querySelector('input').onkeydown = (event) => {
+        if (event.key === 'Enter') document.querySelector('output').textContent = event.target.value;
+      };
+      document.getElementById('first').onclick = () => {
+        window.__refClicks.first++;
+        const input = document.querySelector('input');
+        input.replaceWith(input.cloneNode(true));
+      };
     });
     const initial = await page.snapshot();
     const line = initial.split('\n').find((line) => line.includes('Second round action'));
@@ -54,7 +63,9 @@ export function pageRefPrepareRoundCase() {
     const subtree = await page.snapshot({ scope: 'subtree', root: '@' + match[1] });
     const published = subtree.split('\n').find((line) => line.includes('Second round action')).match(/\[ref=(\d+)/);
     assert(published, 'the final snapshot publishes a ref for the second button');
-    await writeFile(join(tempDir, 'page-ref-round.json'), JSON.stringify({ label: page.label, ref: '@' + published[1] }));
+    const input = initial.split('\n').find((line) => line.includes('Cell address')).match(/\[ref=(\d+)/);
+    assert(input, 'the initial snapshot publishes the cell address input');
+    await writeFile(join(tempDir, 'page-ref-round.json'), JSON.stringify({ label: page.label, ref: '@' + published[1], inputRef: '@' + input[1] }));
   `;
 }
 
@@ -64,11 +75,24 @@ export function pageRefResumeRoundCase() {
     const task = await taskSpace(taskName);
     const page = task.page(saved.label);
     try {
+      await page.waitForTimeout(4_000);
       await page.click(saved.ref);
+      await page.fill(saved.inputRef, 'M2');
+      await page.press(saved.inputRef, 'Enter');
       const clicks = await page.evaluate(() => window.__refClicks);
       assertEqual(clicks.second, 1, 'the published subtree ref still clicks the second button in a new round');
       assertEqual(clicks.first, 0, 'restoring a ref never renumbers it to the first button');
-      await assertRejects(() => page.click(saved.ref), 'Stale ref', 'actions invalidate saved refs');
+      assertEqual(await page.evaluate(() => document.querySelector('output').textContent), 'M2', 'fill and press reuse the same input ref across rounds');
+      await assertRejects(() => page.click(saved.ref), 'Stale ref', 'evaluate still invalidates saved refs');
+
+      await page.snapshot();
+      await page.click('loc=css:#first');
+      await assertRejectsAny(() => page.fill(saved.inputRef, 'wrong node', { timeout: 300 }), 'a replaced input cannot inherit its predecessor ref');
+      assertEqual(await page.evaluate(() => document.querySelector('input').value), 'M2', 'the same-name replacement receives no input');
+
+      await page.snapshot();
+      await page.reload();
+      await assertRejects(() => page.click(saved.ref), 'Stale ref', 'navigation rejects refs from the previous document');
     } finally {
       await page.close();
     }

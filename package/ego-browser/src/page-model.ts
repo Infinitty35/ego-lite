@@ -2688,11 +2688,7 @@ class Page {
   ): Promise<T> {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
-      try {
-        return await operation(sessionId);
-      } finally {
-        await this.#invalidateRefs(page);
-      }
+      return operation(sessionId);
     });
   }
 
@@ -2783,7 +2779,6 @@ class Page {
         };
       } finally {
         await fileChooserGuard?.dispose();
-        await this.#invalidateRefs(page);
       }
     });
   }
@@ -2864,15 +2859,14 @@ class Page {
         "Cannot verify Page document; take a new snapshot",
         "transient",
       );
-    // The Page tree excludes out-of-process frames. Read their own sessions;
-    // a vanished frame leaves no document identity, so its refs expire.
-    const frames = await Promise.allSettled(
+    // The Page tree excludes out-of-process frames. A failed session read must
+    // reach the retry boundary, not persistently expire refs in a live frame.
+    const frames = await Promise.all(
       [...new Set(iframeSessions.values())]
         .filter((session) => session !== sessionId)
         .map(readTree),
     );
-    for (const frame of frames)
-      if (frame.status === "fulfilled") visit(frame.value);
+    for (const frame of frames) visit(frame);
     documents.set("", root);
     return documents;
   }
