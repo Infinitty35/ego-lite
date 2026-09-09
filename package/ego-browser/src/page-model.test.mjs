@@ -1074,6 +1074,8 @@ test("background target discovery adopts a delayed popup and reports its opener"
       },
     });
 
+    // The ledger write can become visible before discovery publishes its notice.
+    await fixture.services.gate.withSpace(7, () => undefined);
     const adopted = await waitForLedgerTarget(ledger, 7, "target-delayed");
     assert.equal(adopted.label, "p2");
     assert.deepEqual(consumeUnhandledPageNotices(), [
