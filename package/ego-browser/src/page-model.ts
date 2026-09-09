@@ -2476,38 +2476,34 @@ class Page {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       if (activate) await this.#activate(page.targetId);
       try {
-        try {
-          return await evaluateInSession<T>(
-            this.#services,
-            sessionId,
-            expression,
-            hasArgument,
-            serializedArgument,
-            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+        return await evaluateInSession<T>(
+          this.#services,
+          sessionId,
+          expression,
+          hasArgument,
+          serializedArgument,
+          PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+          PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+        );
+      } catch (error) {
+        if (isEvaluationExecutionDeadlineError(error)) {
+          throw evaluationExecutionDeadlineError(
+            "page.evaluate",
             PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
           );
-        } catch (error) {
-          if (isEvaluationExecutionDeadlineError(error)) {
-            throw evaluationExecutionDeadlineError(
-              "page.evaluate",
-              PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
-            );
-          }
-          if (isRuntimeEvaluateTransportTimeout(error)) {
-            throw await recoverPageEvaluationTimeout(
-              this.#services,
-              sessionId,
-              "page.evaluate",
-              PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
-            );
-          }
-          if (typeof expression === "function") {
-            throw enrichPageCallbackReferenceError(error, "page.evaluate");
-          }
-          throw error;
         }
-      } finally {
-        if (activate) await this.#invalidateRefs(page);
+        if (isRuntimeEvaluateTransportTimeout(error)) {
+          throw await recoverPageEvaluationTimeout(
+            this.#services,
+            sessionId,
+            "page.evaluate",
+            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+          );
+        }
+        if (typeof expression === "function") {
+          throw enrichPageCallbackReferenceError(error, "page.evaluate");
+        }
+        throw error;
       }
     });
   }

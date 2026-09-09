@@ -2385,28 +2385,55 @@ test("a subtree snapshot inherits the root ref frame provenance", async () => {
   });
 });
 
-test("Page evaluate makes prior snapshot refs stale until a new snapshot", async () => {
-  await withFixture(async (fixture) => {
-    const task = taskForRound(fixture, "round-a");
-    const page = await openTestPage(task, "https://example.test/iframe-host");
-    await page.snapshot({ scope: "full_page" });
-    await page.evaluate("document.body.replaceChildren()");
-    const snapshotsBefore = fixture.calls.filter(
-      ([kind]) => kind === "snapshot",
-    ).length;
+for (const expression of ["document.title", () => document.title]) {
+  test(`Page evaluate preserves snapshot refs for a read-only ${typeof expression}`, async () => {
+    await withFixture(async (fixture) => {
+      const task = taskForRound(fixture, "round-a");
+      const page = await openTestPage(task, "https://example.test/select");
+      await page.snapshot({ scope: "full_page" });
+      await page.evaluate(expression);
 
-    await assert.rejects(
-      () => page.click("@21"),
-      /Stale ref: @21; take a new snapshot/,
+      assert.deepEqual(await page.selectOption("@21", "nl"), ["nl"]);
+      assert.equal(
+        fixture.calls.filter(([kind]) => kind === "snapshot").length,
+        1,
+        "reading the Page must not require a new snapshot",
+      );
+      assert.equal(
+        fixture.calls.find(([, method]) => method === "DOM.resolveNode")[2]
+          .backendNodeId,
+        21,
+      );
+    });
+  });
+}
+
+test("read-only evaluate preserves a published ref across Agent rounds", async () => {
+  await withFixture(async (fixture) => {
+    const page = await openTestPage(
+      taskForRound(fixture, "round-a"),
+      "https://example.test/select",
     );
+    await page.snapshot();
+    const inspected = taskForRound(fixture, "round-b", {
+      pageRefs: new PageRefRegistry(),
+    }).page(page.label);
+    await inspected.evaluate("document.title");
+    const restored = taskForRound(fixture, "round-c", {
+      pageRefs: new PageRefRegistry(),
+    }).page(page.label);
+
+    assert.deepEqual(await restored.selectOption("@21", "nl"), ["nl"]);
     assert.equal(
       fixture.calls.filter(([kind]) => kind === "snapshot").length,
-      snapshotsBefore,
-      "a stale ref must not be silently remapped by an automatic snapshot",
+      1,
+      "each round must reuse the original published mapping",
     );
-
-    await page.snapshot({ scope: "full_page" });
-    await page.click("@21");
+    assert.equal(
+      fixture.calls.find(([, method]) => method === "DOM.resolveNode")[2]
+        .backendNodeId,
+      21,
+    );
   });
 });
 
@@ -5251,14 +5278,14 @@ test("an unknown Page ref fails without guessing a mapping from a new snapshot",
   });
 });
 
-test("ref invalidation survives a new Agent round", async () => {
+test("raw CDP ref invalidation survives a new Agent round", async () => {
   await withFixture(async (fixture) => {
     const page = await openTestPage(
       taskForRound(fixture, "round-a"),
       "https://example.test/first",
     );
     await page.snapshot();
-    await page.evaluate("document.title");
+    await page.cdp("Page.getFrameTree");
     const restored = taskForRound(fixture, "round-b", {
       pageRefs: new PageRefRegistry(),
     }).page(page.label);
