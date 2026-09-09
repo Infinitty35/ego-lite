@@ -147,6 +147,10 @@ jobs:
             release_args+=(--prerelease)
           fi
 
+          if [[ "$release_tag" == v*.*.*-beta.* ]]; then
+            release_args+=(--draft)
+          fi
+
           if [ "$latest" = "true" ]; then
             release_args+=(--latest)
           else
