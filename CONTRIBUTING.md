@@ -211,12 +211,11 @@ E2E suite is a local gate and is not run by this GitHub-hosted workflow.
 
 The current release behavior is:
 
-| Trigger                              | Result                                                                                              |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Push to `dev`                        | Publishes a nightly prerelease named `vX.Y.Z-nightly.YYYYMMDD.SHA`.                                 |
-| Push a `vX.Y.Z-beta.N` tag           | Creates a beta prerelease **Draft**.                                                                |
-| Push a `vX.Y.Z` tag                  | Publishes a stable release and marks it as Latest. The tagged commit must be reachable from `main`. |
-| Push to `main` without a version tag | Runs CI without creating a release.                                                                 |
+| Trigger                                       | Result                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Push a `vX.Y.Z-beta.N` tag                    | Creates a beta prerelease **Draft**.                                                                |
+| Push a `vX.Y.Z` tag                           | Publishes a stable release and marks it as Latest. The tagged commit must be reachable from `main`. |
+| Push to `dev` or `main` without a version tag | Runs CI without creating a release.                                                                 |
 
 Release jobs reuse the tested build and package `dist/out/` into
 `ego-browser-<tag>.zip`. Notes are generated from merged PRs using
