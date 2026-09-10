@@ -4,6 +4,8 @@ Thanks for contributing! This repository contains the **JavaScript SDK and agent
 Skill** used by ego lite. The browser application and its native bindings are
 provided separately by the installed ego lite app.
 
+![ego lite architecture: AI agents, the Skill, the Node.js runtime, and isolated task spaces](docs/assets/ego-lite-architecture.png)
+
 For the product overview, see [README.md](README.md). For the agent-facing API,
 read [SKILL.md](skills/ego-browser/SKILL.md) and the generated
 [API reference](skills/ego-browser/references/api.md). Repository conventions live
